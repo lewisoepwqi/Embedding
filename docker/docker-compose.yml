@@ -17,7 +17,7 @@
 services:
   llama-embed:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
-    container_name: contract_radar_embed
+    container_name: Qwen3-Embedding-0.6B
     restart: unless-stopped
 
     ports:
@@ -47,12 +47,15 @@ services:
       - "${EMBED_POOLING:-last}"             # Qwen3-Embedding 用 last；换 bge-m3 改 cls
       - "-ngl"
       - "${N_GPU_LAYERS:-99}"
+      # 默认 2048：合同雷达嵌入的是短摘要（project_name+contract_name+scope_summary）/查询句，
+      # 远不需 8192。-ub 直接决定计算缓冲大小，8192 会让 0.6B 虚占数 GB 显存（实测 ~6.5GB）。
+      # 嵌长文本场景再按需在 .env 调大（注意 -ub 须 ≥ 单条最长 token 数）。
       - "-c"
-      - "${CONTEXT_SIZE:-8192}"
+      - "${CONTEXT_SIZE:-2048}"
       - "-b"
-      - "${BATCH_SIZE:-8192}"
+      - "${BATCH_SIZE:-2048}"
       - "-ub"
-      - "${UBATCH_SIZE:-8192}"
+      - "${UBATCH_SIZE:-2048}"
       - "--host"
       - "0.0.0.0"
       - "--port"
