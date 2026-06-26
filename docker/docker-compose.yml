@@ -1,0 +1,67 @@
+# contract_radar — 中文嵌入模型服务（Linux + NVIDIA CUDA, Docker）
+#
+# 与 Qwen 对话服务（../../LLM）平级的独立服务：同一 llama.cpp CUDA 镜像，换嵌入模型 + --embeddings 模式，
+# OpenAI-compatible /v1/embeddings 暴露在 8081，供任意调用方（合同雷达 VectorRanker 等）外部调用。
+#
+# 目标机器：Ubuntu 22.04.5 LTS / driver 535 / CUDA 12.2 / 2x RTX A4000 16GB
+# 策略：跑在**第二张卡 GPU 1**（Qwen 在 GPU 0），两者零争抢；0.6B 嵌入单卡富余。
+#
+# 用法：
+#   cd Embedding/docker
+#   cp .env.docker.example .env        # 按需改 MODELS_DIR / EMBED_MODEL_FILE / 端口 / 卡号
+#   docker compose up -d
+#   docker compose logs -f
+#
+# 变量默认值见 .env.docker.example；compose 会做 ${VAR:-default} 替换。
+
+services:
+  llama-embed:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: contract_radar_embed
+    restart: unless-stopped
+
+    ports:
+      # 宿主机端口:容器内端口。容器内固定 8081。
+      - "${EMBED_SERVER_PORT:-8081}:8081"
+
+    volumes:
+      # 把宿主机模型目录只读挂载进容器的 /models。默认 ../models = 与 docker/ 同级的 models/。
+      - "${MODELS_DIR:-../models}:/models:ro"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # 默认用第二张卡（GPU 1）——Qwen 在 GPU 0，嵌入吃备用卡、互不争显存。
+              # A4000 无 NVLink，单模型只能用一张 16GB；0.6B 嵌入远远够。
+              device_ids: ["${EMBED_GPU_DEVICE_ID:-1}"]
+              capabilities: [gpu]
+
+    # list 形式传参，避免 JSON/花括号被 shell/YAML 误解析。
+    command:
+      - "-m"
+      - "/models/${EMBED_MODEL_FILE:-Qwen3-Embedding-0.6B/Qwen3-Embedding-0.6B-Q8_0.gguf}"
+      - "--embeddings"                       # 启用嵌入模式（老版 llama.cpp 为 --embedding）
+      - "--pooling"
+      - "${EMBED_POOLING:-last}"             # Qwen3-Embedding 用 last；换 bge-m3 改 cls
+      - "-ngl"
+      - "${N_GPU_LAYERS:-99}"
+      - "-c"
+      - "${CONTEXT_SIZE:-8192}"
+      - "-b"
+      - "${BATCH_SIZE:-8192}"
+      - "-ub"
+      - "${UBATCH_SIZE:-8192}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8081"
+
+    healthcheck:
+      # llama-server 提供 /health；起来后返回 200。
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
